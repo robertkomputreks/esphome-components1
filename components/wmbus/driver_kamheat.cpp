@@ -31,6 +31,7 @@ namespace
         di.addNameAlias("multical302");
         di.addNameAlias("multical303");
         di.addNameAlias("multical403");
+        di.addNameAlias("multical601");
         di.addNameAlias("multical602");
         di.addNameAlias("multical603");
         di.addNameAlias("multical803");
