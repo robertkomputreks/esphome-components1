@@ -136,6 +136,18 @@ namespace
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::Volume)
             );
+     
+        addNumericFieldWithExtractor(
+            "total_volume_subunit1_m3",
+            "The volume of water measured on subunit 1.",
+            DEFAULT_PRINT_PROPERTIES,
+            Quantity::Volume,
+            VifScaling::Auto, DifSignedness::Signed,
+            FieldMatcher::build()
+            .set(MeasurementType::Instantaneous)
+            .set(VIFRange::Volume)
+            .set(SubunitNr(1))
+            );
 
         addNumericFieldWithExtractor(
             "volume_flow",
@@ -256,6 +268,19 @@ namespace
             .set(StorageNr(1))
             );
 
+        addNumericFieldWithExtractor(
+            "target_volume_subunit1_m3",
+            "The volume of water on subunit 1 at the set date (billing date).",
+            DEFAULT_PRINT_PROPERTIES,
+            Quantity::Volume,
+            VifScaling::Auto, DifSignedness::Signed,
+            FieldMatcher::build()
+            .set(MeasurementType::Instantaneous)
+            .set(VIFRange::Volume)
+            .set(StorageNr(1))
+            .set(SubunitNr(1))
+            );
+     
         addStringFieldWithExtractor(
             "target_date",
             "The most recent billing period date and time (14/348/Date and Time logged).",
