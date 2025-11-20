@@ -56,8 +56,15 @@ namespace wmbus {
       ESP_LOGVV(TAG, "Have data from RF ...");
       WMbusFrame mbus_data = rf_mbus_.get_frame();
 
-      std::string telegram = format_hex_pretty(mbus_data.frame);
-      telegram.erase(std::remove(telegram.begin(), telegram.end(), '.'), telegram.end());
+      std::string telegram;
+      telegram.reserve(mbus_data.frame.size() * 2);
+
+      char buf[4];
+      for (uint8_t b : mbus_data.frame) {
+          snprintf(buf, sizeof(buf), "%02X", b);
+          telegram += buf;
+      }
+
 
       this->frame_timestamp_ = this->time_->timestamp_now();
       send_to_clients(mbus_data);
@@ -95,6 +102,7 @@ namespace wmbus {
           }
 
           this->led_blink();
+         
          // ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm T: %s %c1 %c",
            //         (used_driver.empty()? "Unknown!" : used_driver.c_str()),
             //        meter_id,
@@ -103,19 +111,14 @@ namespace wmbus {
                   //  mbus_data.mode,
                     //mbus_data.block);
           // Log header (bez telegramu)
-            ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm Mode:%c1 Block:%c",
+             ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm Mode:%c1 Block:%c",
                      (used_driver.empty()? "Unknown!" : used_driver.c_str()),
                      meter_id,
                      mbus_data.rssi,
                      mbus_data.mode,
                      mbus_data.block);
-
-            // Drukowanie telegramu w segmentach po 64 znaki
-            const size_t chunk = 64;
-            for (size_t i = 0; i < telegram.size(); i += chunk) {
-                std::string part = telegram.substr(i, chunk);
-                ESP_LOGI(TAG, "TELEGRAM: %s", part.c_str());
-
+            log_long_telegram(TAG, telegram);
+            
           if (meter_in_config) {
             bool supported_link_mode{false};
             if (used_drv_info.linkModes().empty()) {
