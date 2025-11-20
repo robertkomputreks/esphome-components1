@@ -111,13 +111,14 @@ namespace wmbus {
                   //  mbus_data.mode,
                     //mbus_data.block);
           // Log header (bez telegramu)
-             ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm Mode:%c1 Block:%c",
-                     (used_driver.empty()? "Unknown!" : used_driver.c_str()),
-                     meter_id,
-                     mbus_data.rssi,
-                     mbus_data.mode,
-                     mbus_data.block);
-            log_long_telegram(TAG, telegram);
+            ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm\nFULL TELEGRAM:\n%s\nMODE: %c BLOCK: %c",
+                      (used_driver.empty()? "Unknown!" : used_driver.c_str()),
+                      meter_id,
+                      mbus_data.rssi,
+                      telegram.c_str(),
+                      mbus_data.mode,
+                      mbus_data.block);
+
             
           if (meter_in_config) {
             bool supported_link_mode{false};
