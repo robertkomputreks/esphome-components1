@@ -95,13 +95,26 @@ namespace wmbus {
           }
 
           this->led_blink();
-          ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm T: %s %c1 %c",
-                    (used_driver.empty()? "Unknown!" : used_driver.c_str()),
-                    meter_id,
-                    mbus_data.rssi,
-                    telegram.c_str(),
-                    mbus_data.mode,
-                    mbus_data.block);
+         // ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm T: %s %c1 %c",
+           //         (used_driver.empty()? "Unknown!" : used_driver.c_str()),
+            //        meter_id,
+              //      mbus_data.rssi,
+                //    telegram.c_str(),
+                  //  mbus_data.mode,
+                    //mbus_data.block);
+          // Log header (bez telegramu)
+            ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm Mode:%c1 Block:%c",
+                     (used_driver.empty()? "Unknown!" : used_driver.c_str()),
+                     meter_id,
+                     mbus_data.rssi,
+                     mbus_data.mode,
+                     mbus_data.block);
+
+            // Drukowanie telegramu w segmentach po 64 znaki
+            const size_t chunk = 64;
+            for (size_t i = 0; i < telegram.size(); i += chunk) {
+                std::string part = telegram.substr(i, chunk);
+                ESP_LOGI(TAG, "TELEGRAM: %s", part.c_str());
 
           if (meter_in_config) {
             bool supported_link_mode{false};
