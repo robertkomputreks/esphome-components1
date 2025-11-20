@@ -139,15 +139,15 @@ namespace
      
         addNumericFieldWithExtractor(
             "total_volume_subunit1_m3",
-            "The volume of water measured on subunit 1.",
+            "Volume subunit 1 (Kamstrup)",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Volume,
             VifScaling::Auto, DifSignedness::Signed,
             FieldMatcher::build()
-            .set(MeasurementType::Instantaneous)
-            .set(VIFRange::Volume)
-            .set(SubunitNr(1))
-            );
+                .set(DifVifKey("844015"))
+                .set(MeasurementType::Instantaneous)
+        );
+
 
         addNumericFieldWithExtractor(
             "volume_flow",
