@@ -53,7 +53,8 @@ namespace
         di.addDetection(MANUFACTURER_KAM, 0x04,  0x35); // 603
         di.addDetection(MANUFACTURER_KAM, 0x0c,  0x35); // 603
         di.addDetection(MANUFACTURER_KAM, 0x04,  0x39); // 803
-
+        di.addDetection(MANUFACTURER_KAM, 0x04,  0x1a); // 601
+     
         di.setConstructor([](MeterInfo& mi, DriverInfo& di){ return std::shared_ptr<Meter>(new Driver(mi, di)); });
     });
 
