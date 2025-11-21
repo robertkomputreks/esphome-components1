@@ -258,7 +258,7 @@ namespace
 
         addNumericFieldWithExtractor(
             "target_volume_subunit1_m3",
-            "The volume of water on subunit 1 at the set date (billing date).",
+            "Volume for subunit 1 at billing date.",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Volume,
             VifScaling::Auto, DifSignedness::Signed,
@@ -266,9 +266,9 @@ namespace
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::Volume)
             .set(StorageNr(1))
-            .set(SubunitNr(1))
+            .set(SubUnitNr(1))  // ← poprawiona nazwa
             );
-     
+
         addStringFieldWithExtractor(
             "target_date",
             "The most recent billing period date and time (14/348/Date and Time logged).",
