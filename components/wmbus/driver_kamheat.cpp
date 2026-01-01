@@ -128,6 +128,16 @@ namespace
             );
 
         addNumericFieldWithExtractor(
+            "total_energy_consumption",
+            "The total energy consumption recorded by this meter (VIF ext FB 08 = 0.1 GJ).",
+            DEFAULT_PRINT_PROPERTIES,
+            Quantity::Energy,
+            VifScaling::Auto, DifSignedness::Signed,
+            FieldMatcher::build()
+            .set(DifVifKey("04FB08"))
+            );
+
+        addNumericFieldWithExtractor(
             "total_energy_backward",
             "The total backwards energy consumption recorded by this meter.",
             DEFAULT_PRINT_PROPERTIES,
