@@ -177,14 +177,35 @@ namespace wmbus {
                   }
                 }
                 for (auto const& field : sensor->text_fields) {
-                  if (meter->hasStringValue(field.first)) {
-                    std::string value  = meter->getMyStringValue(field.first);
-                    field.second->publish_state(value);
+                  const std::string &fname = field.first;
+
+                  // --- pola "systemowe" (nie z drivera) ---
+                  if (fname == "telegram" || fname == "raw_telegram") {
+                    field.second->publish_state(telegram);  // HEX zbudowany wyżej w loop()
+                    continue;
                   }
-                  else {
-                    ESP_LOGW(TAG, "Can't get requested field '%s'", field.first.c_str());
+                  if (fname == "mode") {
+                    field.second->publish_state(std::string(1, mbus_data.mode));
+                    continue;
+                  }
+                  if (fname == "block") {
+                    field.second->publish_state(std::string(1, mbus_data.block));
+                    continue;
+                  }
+                  if (fname == "driver") {
+                    field.second->publish_state(used_driver);
+                    continue;
+                  }
+
+                  // --- standard: stringi z drivera ---
+                  if (meter->hasStringValue(fname)) {
+                    std::string value = meter->getMyStringValue(fname);
+                    field.second->publish_state(value);
+                  } else {
+                    ESP_LOGW(TAG, "Can't get requested field '%s'", fname.c_str());
                   }
                 }
+                
 #ifdef USE_WMBUS_MQTT
                 std::string json;
                 meter->printJsonMeter(&t, &json, false);
