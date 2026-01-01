@@ -151,6 +151,12 @@ namespace wmbus {
               AboutTelegram about{"ESPHome wM-Bus", mbus_data.rssi, FrameType::WMBUS, this->frame_timestamp_};
               meter->handleTelegram(about, mbus_data.frame, false, &addresses, &id_match, &t);
               if (id_match) {
+                 // >>> DODAJ TYLKO TO (debug)
+                std::string json;
+                meter->printJsonMeter(&t, &json, false);
+                ESP_LOGD(TAG, "METER JSON: %s", json.c_str());
+                  // <<< KONIEC DODATKU
+
                 for (auto const& field : sensor->fields) {
                   std::string field_name = field.first.first;
                   std::string unit = field.first.second;
