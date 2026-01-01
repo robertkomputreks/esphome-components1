@@ -290,6 +290,19 @@ namespace
             .set(VIFRange::OperatingTime)
             .add(VIFCombinable::Mfct21)
             );
+     // --- Target volume, subunit 1 (StorageNr=1, SubUnit=1) ---
+        addNumericFieldWithExtractor(
+            "target_volume_subunit1",
+            "Target volume (billing period) for subunit 1.",
+            DEFAULT_PRINT_PROPERTIES,
+            Quantity::Volume,
+            VifScaling::Auto, DifSignedness::Signed,
+            FieldMatcher::build()
+            .set(MeasurementType::Instantaneous)
+            .set(VIFRange::Volume)
+            .set(StorageNr(1))
+            .set(SubUnitNr(1))   // <- jeśli u Ciebie nazywa się inaczej, patrz niżej
+            );
 
     }
 }
