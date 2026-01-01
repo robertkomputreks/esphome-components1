@@ -303,6 +303,17 @@ namespace
             .set(StorageNr(1))
             .set(SubUnitNr(1))   // <- jeśli u Ciebie nazywa się inaczej, patrz niżej
             );
+        addNumericFieldWithExtractor(
+            "total_volume_subunit1",
+            "Total volume for subunit 1 (storage 0).",
+            DEFAULT_PRINT_PROPERTIES,
+            Quantity::Volume,
+            VifScaling::Auto, DifSignedness::Signed,
+            FieldMatcher::build()
+            .set(MeasurementType::Instantaneous)
+            .set(VIFRange::Volume)
+            .set(SubUnitNr(1))     // <-- kluczowe: subunit=1
+            );
 
     }
 }
