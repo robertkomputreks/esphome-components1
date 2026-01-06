@@ -142,10 +142,6 @@ namespace wmbus {
         
         if (this->log_all_ || meter_in_config) { //No need to do sth if logging is disabled and meter is not configured
           
-// --- driver detection (raz) ---
-auto detected_drv_info      = pickMeterDriver(&t);
-std::string detected_driver = (detected_drv_info.name().str().empty() ? "" : detected_drv_info.name().str().c_str());
-
 // --- WILDCARD listener: meter_id == 0 obsługuje "nieznane" liczniki ---
 // Możesz go ograniczyć do kamheat ustawiając type: kamheat w YAML
 WMBusListener *wild = nullptr;
