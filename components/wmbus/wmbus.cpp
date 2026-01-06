@@ -142,8 +142,6 @@ namespace wmbus {
         
         if (this->log_all_ || meter_in_config) { //No need to do sth if logging is disabled and meter is not configured
 
-          auto detected_drv_info      = pickMeterDriver(&t);
-          std::string detected_driver = (detected_drv_info.name().str().empty() ? "" : detected_drv_info.name().str().c_str());
 
           //If the driver was explicitly stated in meter config, use that driver instead on detected one
           auto used_drv_info      = detected_drv_info;
