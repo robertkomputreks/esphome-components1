@@ -13,7 +13,7 @@
 
 #ifdef USE_ESP32
 SET_LOOP_TASK_STACK_SIZE(32 * 1024);
-#pragma message ( "Loop task stack increased." )
+#pragma message("Loop task stack increased.")
 #endif
 #ifdef USE_ESP8266
 #error "ESP8266 not supported. Please use version 3.x: https://github.com/SzczepanLeon/esphome-components/issues/131"
@@ -22,577 +22,461 @@ SET_LOOP_TASK_STACK_SIZE(32 * 1024);
 namespace esphome {
 namespace wmbus {
 
-  static const char *TAG = "wmbus";
+static const char *TAG = "wmbus";
 
-  static void log_long_telegram(const char *tag, const std::string &telegram) {
-    const size_t chunk = 200;
-    size_t len = telegram.size();
+static void log_long_telegram(const char *tag, const std::string &telegram) {
+  const size_t chunk = 200;
+  size_t len = telegram.size();
 
-    ESP_LOGI(tag, "Telegram length: %u bytes", (unsigned)len);
-    for (size_t i = 0; i < len; i += chunk) {
-      std::string part = telegram.substr(i, chunk);
-      ESP_LOGI(tag, "T[%03u-%03u]: %s",
-               (unsigned)i,
-               (unsigned)(i + part.size()),
-               part.c_str());
-    }
+  ESP_LOGI(tag, "Telegram length: %u bytes", (unsigned) len);
+
+  for (size_t i = 0; i < len; i += chunk) {
+    std::string part = telegram.substr(i, chunk);
+    ESP_LOGI(tag, "T[%03u-%03u]: %s", (unsigned) i, (unsigned) (i + part.size()), part.c_str());
   }
+}
 
-  void InfoComponent::setup() {
+void InfoComponent::setup() {
+  return;
+}
+
+void WMBusComponent::setup() {
+  this->high_freq_.start();
+  if (this->led_pin_ != nullptr) {
+    this->led_pin_->setup();
+    this->led_pin_->digital_write(false);
+    this->led_on_ = false;
+  }
+  if (!rf_mbus_.init(this->spi_conf_.mosi->get_pin(), this->spi_conf_.miso->get_pin(), this->spi_conf_.clk->get_pin(),
+                     this->spi_conf_.cs->get_pin(), this->spi_conf_.gdo0->get_pin(), this->spi_conf_.gdo2->get_pin(),
+                     this->frequency_, this->sync_mode_)) {
+    this->mark_failed();
+    ESP_LOGE(TAG, "RF chip initialization failed");
     return;
   }
+#ifdef USE_WMBUS_MQTT
+  this->mqtt_client_.setClient(this->tcp_client_);
+  this->mqtt_client_.setServer(this->mqtt_->ip, this->mqtt_->port);
+  this->mqtt_client_.setBufferSize(1000);
+#endif
+}
 
-  void WMBusComponent::setup() {
-    this->high_freq_.start();
-    if (this->led_pin_ != nullptr) {
-      this->led_pin_->setup();
-      this->led_pin_->digital_write(false);
-      this->led_on_ = false;
+void WMBusComponent::loop() {
+  this->led_handler();
+  if (rf_mbus_.task()) {
+    ESP_LOGVV(TAG, "Have data from RF ...");
+    WMbusFrame mbus_data = rf_mbus_.get_frame();
+
+    std::string telegram;
+    telegram.reserve(mbus_data.frame.size() * 2);
+
+    char buf[4];
+    for (uint8_t b : mbus_data.frame) {
+      snprintf(buf, sizeof(buf), "%02X", b);
+      telegram += buf;
     }
-    if (!rf_mbus_.init(this->spi_conf_.mosi->get_pin(), this->spi_conf_.miso->get_pin(),
-                       this->spi_conf_.clk->get_pin(),  this->spi_conf_.cs->get_pin(),
-                       this->spi_conf_.gdo0->get_pin(), this->spi_conf_.gdo2->get_pin(),
-                       this->frequency_, this->sync_mode_)) {
-      this->mark_failed();
-      ESP_LOGE(TAG, "RF chip initialization failed");
+
+    this->frame_timestamp_ = this->time_->timestamp_now();
+    send_to_clients(mbus_data);
+
+    Telegram t;
+    const bool parsed = t.parseHeader(mbus_data.frame);
+    if (!parsed || t.addresses.empty()) {
+      ESP_LOGE(TAG, "Can't parse header / empty address! T: %s", telegram.c_str());
       return;
     }
-#ifdef USE_WMBUS_MQTT
-    this->mqtt_client_.setClient(this->tcp_client_);
-    this->mqtt_client_.setServer(this->mqtt_->ip, this->mqtt_->port);
-    this->mqtt_client_.setBufferSize(1000);
-#endif
-  }
 
-  void WMBusComponent::loop() {
-    this->led_handler();
-    if (rf_mbus_.task()) {
-      ESP_LOGVV(TAG, "Have data from RF ...");
-      WMbusFrame mbus_data = rf_mbus_.get_frame();
+    const uint32_t meter_id = (uint32_t) strtoul(t.addresses[0].id.c_str(), nullptr, 16);
+    const bool meter_in_config = (this->wmbus_listeners_.count(meter_id) == 1);
 
-      std::string telegram;
-      telegram.reserve(mbus_data.frame.size() * 2);
+    auto detected_drv_info = pickMeterDriver(&t);
+    std::string detected_driver =
+        (detected_drv_info.name().str().empty() ? "" : detected_drv_info.name().str().c_str());
 
-      char buf[4];
-      for (uint8_t b : mbus_data.frame) {
-          snprintf(buf, sizeof(buf), "%02X", b);
-          telegram += buf;
+    // --- PUBLIKACJA "ANY" (wszystkie kamheat, nawet niekonfigurowane) ---
+    const bool is_kamheat = (detected_driver == "kamheat");
+    if (is_kamheat) {
+      if (this->any_rssi_ != nullptr) {
+        this->any_rssi_->publish_state(mbus_data.rssi);
       }
-
-
-      this->frame_timestamp_ = this->time_->timestamp_now();
-      send_to_clients(mbus_data);
-
-      Telegram t;
-      const bool parsed = t.parseHeader(mbus_data.frame);
-      if (!parsed || t.addresses.empty()) {
-        ESP_LOGE(TAG, "Can't parse header / empty address! T: %s", telegram.c_str());
-        return;  // albo: continue; (jeśli wolisz nie przerywać loop'a)
+      if (this->any_telegram_ != nullptr) {
+        this->any_telegram_->publish_state(telegram);  // HEX
       }
+      if (this->any_json_ != nullptr) {
+        char telegram_time[24];
+        strftime(telegram_time, sizeof(telegram_time), "%Y-%m-%d %H:%M:%S.00Z", gmtime(&(this->frame_timestamp_)));
 
-      // ID licznika jako uint32
-      const uint32_t meter_id = (uint32_t) strtoul(t.addresses[0].id.c_str(), nullptr, 16);
-      const bool meter_in_config = (this->wmbus_listeners_.count(meter_id) == 1);
-
-      // Detekcja drivera bez klucza (działa też dla nieznanych ID)
-      auto detected_drv_info      = pickMeterDriver(&t);
-      std::string detected_driver = (detected_drv_info.name().str().empty() ? "" : detected_drv_info.name().str().c_str());
-
-      // --- PUBLIKACJA "ANY" (wszystkie kamheat, nawet niekonfigurowane) ---
-      const bool is_kamheat = (detected_driver == "kamheat");
-      if (is_kamheat) {
-        if (this->any_rssi_ != nullptr) {
-          this->any_rssi_->publish_state(mbus_data.rssi);
-        }
-        if (this->any_telegram_ != nullptr) {
-          this->any_telegram_->publish_state(telegram);  // HEX
-        }
-        if (this->any_json_ != nullptr) {
-          // timestamp jak w RTLWMBUS
-          char telegram_time[24];
-          strftime(telegram_time, sizeof(telegram_time), "%Y-%m-%d %H:%M:%S.00Z", gmtime(&(this->frame_timestamp_)));
-
-          // mały JSON do bazy (bez dekodowania payloadu)
-          std::string j;
-          j.reserve(400 + telegram.size());
-          j += "{";
-          j += "\"meter\":\"";
-          j += detected_driver;
-          j += "\",\"id\":\"";
-          j += t.addresses[0].id;
-          j += "\",\"rssi_dbm\":";
-          j += std::to_string(mbus_data.rssi);
-          j += ",\"mode\":\"";
-          j += std::string(1, mbus_data.mode);
-          j += "\",\"block\":\"";
-          j += std::string(1, mbus_data.block);
-          j += "\",\"timestamp\":\"";
-          j += telegram_time;
-          j += "\",\"telegram\":\"";
-          j += telegram;
-          j += "\"}";
-          this->any_json_->publish_state(j);
-        }
-      }
-
- 
-        // UWAGA: poniżej możesz użyć już detected_driver / detected_drv_info
-        // i tylko gdy meter_in_config wybierać used_driver z YAML
-
-        
-        if (this->log_all_ || meter_in_config) { //No need to do sth if logging is disabled and meter is not configured
-          
-// --- WILDCARD listener: meter_id == 0 obsługuje "nieznane" liczniki ---
-// Możesz go ograniczyć do kamheat ustawiając type: kamheat w YAML
-WMBusListener *wild = nullptr;
-if (this->wmbus_listeners_.count(0) == 1) {
-  wild = this->wmbus_listeners_[0];
-}
-
-if (wild != nullptr) {
-  const bool type_ok = (wild->type.empty() || wild->type == detected_driver);
-
-  // Publikujemy dla wszystkich (lub tylko kamheat jeśli tak ustawisz w YAML)
-  if (type_ok) {
-    // RSSI jako sensor (jeśli skonfigurowany)
-    for (auto const &field : wild->fields) {
-      const std::string &fname = field.first.first;
-      if (fname == "rssi") {
-        field.second->publish_state(mbus_data.rssi);
+        std::string j;
+        j.reserve(400 + telegram.size());
+        j += "{";
+        j += "\"meter\":\"";
+        j += detected_driver;
+        j += "\",\"id\":\"";
+        j += t.addresses[0].id;
+        j += "\",\"rssi_dbm\":";
+        j += std::to_string(mbus_data.rssi);
+        j += ",\"mode\":\"";
+        j += std::string(1, mbus_data.mode);
+        j += "\",\"block\":\"";
+        j += std::string(1, mbus_data.block);
+        j += "\",\"timestamp\":\"";
+        j += telegram_time;
+        j += "\",\"telegram\":\"";
+        j += telegram;
+        j += "\"}";
+        this->any_json_->publish_state(j);
       }
     }
 
-    // TEXT-y (telegram/mode/block/driver/id) jako text_sensor
-    for (auto const &tf : wild->text_fields) {
-      const std::string &fname = tf.first;
-
-      if (fname == "telegram" || fname == "raw_telegram") {
-        tf.second->publish_state(telegram);  // HEX
-        continue;
-      }
-      if (fname == "mode") {
-        tf.second->publish_state(std::string(1, mbus_data.mode));
-        continue;
-      }
-      if (fname == "block") {
-        tf.second->publish_state(std::string(1, mbus_data.block));
-        continue;
-      }
-      if (fname == "driver") {
-        tf.second->publish_state(detected_driver);
-        continue;
-      }
-      if (fname == "id") {
-        tf.second->publish_state(t.addresses[0].id);  // HEX ID licznika
-        continue;
-      }
-
-      // inne pola ignorujemy dla wildcard (bo bez klucza i dekodowania i tak ich nie wyciągniesz)
-    }
-  }
-}
-
-          //If the driver was explicitly stated in meter config, use that driver instead on detected one
-          auto used_drv_info      = detected_drv_info;
-          std::string used_driver = detected_driver;
-          if (meter_in_config) {
-            auto *sensor = this->wmbus_listeners_[meter_id];
-            used_driver = ((sensor->type).empty() ? detected_driver : sensor->type);
-            if (!(sensor->type).empty()){
-              auto *used_drv_info_ptr = lookupDriver(used_driver);
-              if (used_drv_info_ptr == nullptr) {
-                used_driver = detected_driver;
-                used_drv_info = detected_drv_info;
-                ESP_LOGW(TAG, "Selected driver %s doesn't exist, using %s", (sensor->type).c_str(), used_driver.c_str());
-              }
-              else{
-                used_drv_info = *used_drv_info_ptr;
-                ESP_LOGI(TAG, "Using selected driver %s (detected driver was %s)", used_driver.c_str(), detected_driver.c_str());
-              }
-            }
+    if (this->log_all_ || meter_in_config) {  // No need to do sth if logging is disabled and meter is not configured
+      // If the driver was explicitly stated in meter config, use that driver instead on detected one
+      auto used_drv_info = detected_drv_info;
+      std::string used_driver = detected_driver;
+      if (meter_in_config) {
+        auto *sensor = this->wmbus_listeners_[meter_id];
+        used_driver = ((sensor->type).empty() ? detected_driver : sensor->type);
+        if (!(sensor->type).empty()) {
+          auto *used_drv_info_ptr = lookupDriver(used_driver);
+          if (used_drv_info_ptr == nullptr) {
+            used_driver = detected_driver;
+            used_drv_info = detected_drv_info;
+            ESP_LOGW(TAG, "Selected driver %s doesn't exist, using %s", (sensor->type).c_str(), used_driver.c_str());
+          } else {
+            used_drv_info = *used_drv_info_ptr;
+            ESP_LOGI(TAG, "Using selected driver %s (detected driver was %s)", used_driver.c_str(),
+                     detected_driver.c_str());
           }
+        }
+      }
 
-          this->led_blink();
-         
-         // ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm T: %s %c1 %c",
-           //         (used_driver.empty()? "Unknown!" : used_driver.c_str()),
-            //        meter_id,
-              //      mbus_data.rssi,
-                //    telegram.c_str(),
-                  //  mbus_data.mode,
-                    //mbus_data.block);
-          // Log header (bez telegramu)
-            ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm\nFULL TELEGRAM:\n%s\nMODE: %c BLOCK: %c",
-                      (used_driver.empty()? "Unknown!" : used_driver.c_str()),
-                      meter_id,
-                      mbus_data.rssi,
-                      telegram.c_str(),
-                      mbus_data.mode,
-                      mbus_data.block);
+      this->led_blink();
 
-            
-          if (meter_in_config) {
-            bool supported_link_mode{false};
-            if (used_drv_info.linkModes().empty()) {
-              supported_link_mode = true;
-              ESP_LOGW(TAG, "Link modes not defined in driver %s. Processing anyway.",
-                      (used_driver.empty()? "Unknown!" : used_driver.c_str()));
-            }
-            else {
-              supported_link_mode = ( ((mbus_data.mode == 'T') && (used_drv_info.linkModes().has(LinkMode::T1))) ||
-                                      ((mbus_data.mode == 'C') && (used_drv_info.linkModes().has(LinkMode::C1))) );
-            }
+      ESP_LOGI(TAG, "%s [0x%08x] RSSI: %ddBm\nFULL TELEGRAM:\n%s\nMODE: %c BLOCK: %c",
+               (used_driver.empty() ? "Unknown!" : used_driver.c_str()), meter_id, mbus_data.rssi, telegram.c_str(),
+               mbus_data.mode, mbus_data.block);
 
-            if (used_driver.empty()) {
-              ESP_LOGW(TAG, "Can't find driver for T: %s", telegram.c_str());
-            }
-            else if (!supported_link_mode) {
-              ESP_LOGW(TAG, "Link mode %c1 not supported in driver %s",
-                      mbus_data.mode,
-                      used_driver.c_str());
-            }
-            else {
-              auto *sensor = this->wmbus_listeners_[meter_id];
-              
-              bool id_match;
-              MeterInfo mi;
-              mi.parse("ESPHome", used_driver, t.addresses[0].id + ",", sensor->myKey);
-              auto meter = createMeter(&mi);
-              std::vector<Address> addresses;
-              AboutTelegram about{"ESPHome wM-Bus", mbus_data.rssi, FrameType::WMBUS, this->frame_timestamp_};
-              meter->handleTelegram(about, mbus_data.frame, false, &addresses, &id_match, &t);
-              if (id_match) {
-                 // >>> DODAJ TYLKO TO (debug)
-                std::string json;
-                meter->printJsonMeter(&t, &json, false);
-                ESP_LOGD(TAG, "METER JSON: %s", json.c_str());
-                  // <<< KONIEC DODATKU
+      if (meter_in_config) {
+        bool supported_link_mode{false};
+        if (used_drv_info.linkModes().empty()) {
+          supported_link_mode = true;
+          ESP_LOGW(TAG, "Link modes not defined in driver %s. Processing anyway.",
+                   (used_driver.empty() ? "Unknown!" : used_driver.c_str()));
+        } else {
+          supported_link_mode = (((mbus_data.mode == 'T') && (used_drv_info.linkModes().has(LinkMode::T1))) ||
+                                 ((mbus_data.mode == 'C') && (used_drv_info.linkModes().has(LinkMode::C1))));
+        }
 
-                for (auto const& field : sensor->fields) {
-                  std::string field_name = field.first.first;
-                  std::string unit = field.first.second;
-                  if (field_name == "rssi") {
-                    field.second->publish_state(mbus_data.rssi);
-                  }
-                  else if (field.second->get_unit_of_measurement().empty()) {
-                    ESP_LOGW(TAG, "Fields without unit not supported as sensor, please switch to text_sensor.");
-                  }
-                  else {
-                    Unit field_unit = toUnit(field.second->get_unit_of_measurement());
-                    if (field_unit != Unit::Unknown) {
-                      double value  = meter->getNumericValue(field_name, field_unit);
-                      if (!std::isnan(value)) {
-                        field.second->publish_state(value);
-                      }
-                      else {
-                        ESP_LOGW(TAG, "Can't get requested field '%s' with unit '%s'", field_name.c_str(), unit.c_str());
-                      }
-                    }
-                    else {
-                      ESP_LOGW(TAG, "Can't get proper unit from '%s'", unit.c_str());
-                    }
-                  }
-                }
-                for (auto const& field : sensor->text_fields) {
-                  const std::string &fname = field.first;
+        if (used_driver.empty()) {
+          ESP_LOGW(TAG, "Can't find driver for T: %s", telegram.c_str());
+        } else if (!supported_link_mode) {
+          ESP_LOGW(TAG, "Link mode %c1 not supported in driver %s", mbus_data.mode, used_driver.c_str());
+        } else {
+          auto *sensor = this->wmbus_listeners_[meter_id];
 
-                  // --- pola "systemowe" (nie z drivera) ---
-                  if (fname == "telegram" || fname == "raw_telegram") {
-                    field.second->publish_state(telegram);  // HEX zbudowany wyżej w loop()
-                    continue;
-                  }
-                  if (fname == "mode") {
-                    field.second->publish_state(std::string(1, mbus_data.mode));
-                    continue;
-                  }
-                  if (fname == "block") {
-                    field.second->publish_state(std::string(1, mbus_data.block));
-                    continue;
-                  }
-                  if (fname == "driver") {
-                    field.second->publish_state(used_driver);
-                    continue;
-                  }
+          bool id_match;
+          MeterInfo mi;
+          mi.parse("ESPHome", used_driver, t.addresses[0].id + ",", sensor->myKey);
+          auto meter = createMeter(&mi);
+          std::vector<Address> addresses;
+          AboutTelegram about{"ESPHome wM-Bus", mbus_data.rssi, FrameType::WMBUS, this->frame_timestamp_};
+          meter->handleTelegram(about, mbus_data.frame, false, &addresses, &id_match, &t);
+          if (id_match) {
+            std::string json;
+            meter->printJsonMeter(&t, &json, false);
+            ESP_LOGD(TAG, "METER JSON: %s", json.c_str());
 
-                  // --- standard: stringi z drivera ---
-                  if (meter->hasStringValue(fname)) {
-                    std::string value = meter->getMyStringValue(fname);
+            for (auto const &field : sensor->fields) {
+              std::string field_name = field.first.first;
+              std::string unit = field.first.second;
+              if (field_name == "rssi") {
+                field.second->publish_state(mbus_data.rssi);
+              } else if (field.second->get_unit_of_measurement().empty()) {
+                ESP_LOGW(TAG, "Fields without unit not supported as sensor, please switch to text_sensor.");
+              } else {
+                Unit field_unit = toUnit(field.second->get_unit_of_measurement());
+                if (field_unit != Unit::Unknown) {
+                  double value = meter->getNumericValue(field_name, field_unit);
+                  if (!std::isnan(value)) {
                     field.second->publish_state(value);
                   } else {
-                    ESP_LOGW(TAG, "Can't get requested field '%s'", fname.c_str());
+                    ESP_LOGW(TAG, "Can't get requested field '%s' with unit '%s'", field_name.c_str(), unit.c_str());
                   }
+                } else {
+                  ESP_LOGW(TAG, "Can't get proper unit from '%s'", unit.c_str());
                 }
-                
+              }
+            }
+
+            for (auto const &field : sensor->text_fields) {
+              const std::string &fname = field.first;
+
+              if (fname == "telegram" || fname == "raw_telegram") {
+                field.second->publish_state(telegram);
+                continue;
+              }
+              if (fname == "mode") {
+                field.second->publish_state(std::string(1, mbus_data.mode));
+                continue;
+              }
+              if (fname == "block") {
+                field.second->publish_state(std::string(1, mbus_data.block));
+                continue;
+              }
+              if (fname == "driver") {
+                field.second->publish_state(used_driver);
+                continue;
+              }
+
+              if (meter->hasStringValue(fname)) {
+                std::string value = meter->getMyStringValue(fname);
+                field.second->publish_state(value);
+              } else {
+                ESP_LOGW(TAG, "Can't get requested field '%s'", fname.c_str());
+              }
+            }
+
 #ifdef USE_WMBUS_MQTT
-                std::string json;
-                meter->printJsonMeter(&t, &json, false);
-                std::string mqtt_topic = (App.get_friendly_name().empty() ? App.get_name() : App.get_friendly_name()) + "/wmbus/" + t.addresses[0].id;
-                if (this->mqtt_client_.connect("", this->mqtt_->name.c_str(), this->mqtt_->password.c_str())) {
-                  this->mqtt_client_.publish(mqtt_topic.c_str(), json.c_str(), this->mqtt_->retained);
-                  ESP_LOGV(TAG, "Publish(topic='%s' payload='%s' retain=%d)", mqtt_topic.c_str(), json.c_str(), this->mqtt_->retained);
-                  this->mqtt_client_.disconnect();
-                }
-                else {
-                  ESP_LOGV(TAG, "Publish failed for topic='%s' (len=%u).", mqtt_topic.c_str(), json.length());
-                }
+            std::string json;
+            meter->printJsonMeter(&t, &json, false);
+            std::string mqtt_topic = (App.get_friendly_name().empty() ? App.get_name() : App.get_friendly_name()) +
+                                     "/wmbus/" + t.addresses[0].id;
+            if (this->mqtt_client_.connect("", this->mqtt_->name.c_str(), this->mqtt_->password.c_str())) {
+              this->mqtt_client_.publish(mqtt_topic.c_str(), json.c_str(), this->mqtt_->retained);
+              ESP_LOGV(TAG, "Publish(topic='%s' payload='%s' retain=%d)", mqtt_topic.c_str(), json.c_str(),
+                       this->mqtt_->retained);
+              this->mqtt_client_.disconnect();
+            } else {
+              ESP_LOGV(TAG, "Publish failed for topic='%s' (len=%u).", mqtt_topic.c_str(), json.length());
+            }
 #elif defined(USE_MQTT)
-                std::string json;
-                meter->printJsonMeter(&t, &json, false);
-                std::string mqtt_topic = this->mqtt_client_->get_topic_prefix() + "/wmbus/" + t.addresses[0].id;
-                this->mqtt_client_->publish(mqtt_topic, json);
+            std::string json;
+            meter->printJsonMeter(&t, &json, false);
+            std::string mqtt_topic = this->mqtt_client_->get_topic_prefix() + "/wmbus/" + t.addresses[0].id;
+            this->mqtt_client_->publish(mqtt_topic, json);
 #endif
-              }
-              else {
-                ESP_LOGE(TAG, "Not for me T: %s", telegram.c_str());
-              }
-            }
-          }
-          else {
-            // meter not in config
+          } else {
+            ESP_LOGE(TAG, "Not for me T: %s", telegram.c_str());
           }
         }
+      } else {
+        // meter not in config
       }
     }
   }
+}
 
-  void WMBusComponent::register_wmbus_listener(const uint32_t meter_id, const std::string type, const std::string key) {
-    if (this->wmbus_listeners_.count(meter_id) == 0) {
-      WMBusListener *listener = new wmbus::WMBusListener(meter_id, type, key);
-      this->wmbus_listeners_.insert({meter_id, listener});
+void WMBusComponent::register_wmbus_listener(const uint32_t meter_id, const std::string type, const std::string key) {
+  if (this->wmbus_listeners_.count(meter_id) == 0) {
+    WMBusListener *listener = new wmbus::WMBusListener(meter_id, type, key);
+    this->wmbus_listeners_.insert({meter_id, listener});
+  }
+}
+
+void WMBusComponent::led_blink() {
+  if (this->led_pin_ != nullptr) {
+    if (!this->led_on_) {
+      this->led_on_millis_ = millis();
+      this->led_pin_->digital_write(true);
+      this->led_on_ = true;
     }
   }
+}
 
-  void WMBusComponent::led_blink() {
-    if (this->led_pin_ != nullptr) {
-      if (!this->led_on_) {
-        this->led_on_millis_ = millis();
-        this->led_pin_->digital_write(true);
-        this->led_on_ = true;
+void WMBusComponent::led_handler() {
+  if (this->led_pin_ != nullptr) {
+    if (this->led_on_) {
+      if ((millis() - this->led_on_millis_) >= this->led_blink_time_) {
+        this->led_pin_->digital_write(false);
+        this->led_on_ = false;
       }
     }
   }
+}
 
-  void WMBusComponent::led_handler() {
-    if (this->led_pin_ != nullptr) {
-      if (this->led_on_) {
-        if ((millis() - this->led_on_millis_) >= this->led_blink_time_) {
-          this->led_pin_->digital_write(false);
-          this->led_on_ = false;
+void WMBusComponent::send_to_clients(WMbusFrame &mbus_data) {
+  for (auto &client : this->clients_) {
+    switch (client.format) {
+      case FORMAT_HEX: {
+        switch (client.transport) {
+          case TRANSPORT_TCP: {
+            ESP_LOGV(TAG, "Will send HEX telegram to %s:%d via TCP", client.ip.str().c_str(), client.port);
+            if (this->tcp_client_.connect(client.ip.str().c_str(), client.port)) {
+              this->tcp_client_.write((const uint8_t *) mbus_data.frame.data(), mbus_data.frame.size());
+              this->tcp_client_.stop();
+            } else {
+              ESP_LOGE(TAG, "Can't connect via TCP to %s:%d", client.ip.str().c_str(), client.port);
+            }
+          } break;
+          case TRANSPORT_UDP: {
+            ESP_LOGV(TAG, "Will send HEX telegram to %s:%d via UDP", client.ip.str().c_str(), client.port);
+            this->udp_client_.beginPacket(client.ip.str().c_str(), client.port);
+            this->udp_client_.write((const uint8_t *) mbus_data.frame.data(), mbus_data.frame.size());
+            this->udp_client_.endPacket();
+          } break;
+          default:
+            ESP_LOGE(TAG, "Unknown transport!");
+            break;
         }
-      }
-    }
-  }
+      } break;
 
-  void WMBusComponent::send_to_clients(WMbusFrame &mbus_data) {
-    for (auto & client : this->clients_) {
-      switch (client.format) {
-        case FORMAT_HEX:
-          {
-            switch (client.transport) {
-              case TRANSPORT_TCP:
-                {
-                  ESP_LOGV(TAG, "Will send HEX telegram to %s:%d via TCP", client.ip.str().c_str(), client.port);
-                  if (this->tcp_client_.connect(client.ip.str().c_str(), client.port)) {
-                    this->tcp_client_.write((const uint8_t *) mbus_data.frame.data(), mbus_data.frame.size());
-                    this->tcp_client_.stop();
-                  }
-                  else {
-                    ESP_LOGE(TAG, "Can't connect via TCP to %s:%d", client.ip.str().c_str(), client.port);
-                  }
-                }
-                break;
-              case TRANSPORT_UDP:
-                {
-                  ESP_LOGV(TAG, "Will send HEX telegram to %s:%d via UDP", client.ip.str().c_str(), client.port);
-                  this->udp_client_.beginPacket(client.ip.str().c_str(), client.port);
-                  this->udp_client_.write((const uint8_t *) mbus_data.frame.data(), mbus_data.frame.size());
-                  this->udp_client_.endPacket();
-                }
-                break;
-              default:
-                ESP_LOGE(TAG, "Unknown transport!");
-                break;
+      case FORMAT_RTLWMBUS: {
+        char telegram_time[24];
+        strftime(telegram_time, sizeof(telegram_time), "%Y-%m-%d %H:%M:%S.00Z", gmtime(&(this->frame_timestamp_)));
+        switch (client.transport) {
+          case TRANSPORT_TCP: {
+            ESP_LOGV(TAG, "Will send RTLWMBUS telegram to %s:%d via TCP", client.ip.str().c_str(), client.port);
+            if (this->tcp_client_.connect(client.ip.str().c_str(), client.port)) {
+              this->tcp_client_.printf("%c1;1;1;%s;%d;;;0x", mbus_data.mode, telegram_time, mbus_data.rssi);
+              for (int i = 0; i < mbus_data.frame.size(); i++) {
+                this->tcp_client_.printf("%02X", mbus_data.frame[i]);
+              }
+              this->tcp_client_.print("\n");
+              this->tcp_client_.stop();
+            } else {
+              ESP_LOGE(TAG, "Can't connect via TCP to %s:%d", client.ip.str().c_str(), client.port);
             }
-          }
-          break;
-        case FORMAT_RTLWMBUS:
-          {
-            char telegram_time[24];
-            strftime(telegram_time, sizeof(telegram_time), "%Y-%m-%d %H:%M:%S.00Z", gmtime(&(this->frame_timestamp_)));
-            switch (client.transport) {
-              case TRANSPORT_TCP:
-                {
-                  ESP_LOGV(TAG, "Will send RTLWMBUS telegram to %s:%d via TCP", client.ip.str().c_str(), client.port);
-                  if (this->tcp_client_.connect(client.ip.str().c_str(), client.port)) {
-                    this->tcp_client_.printf("%c1;1;1;%s;%d;;;0x",
-                                             mbus_data.mode,
-                                             telegram_time,
-                                             mbus_data.rssi);
-                    for (int i = 0; i < mbus_data.frame.size(); i++) {
-                      this->tcp_client_.printf("%02X", mbus_data.frame[i]);
-                    }
-                    this->tcp_client_.print("\n");
-                    this->tcp_client_.stop();
-                  }
-                  else {
-                    ESP_LOGE(TAG, "Can't connect via TCP to %s:%d", client.ip.str().c_str(), client.port);
-                  }
-                }
-                break;
-              case TRANSPORT_UDP:
-                {
-                  ESP_LOGV(TAG, "Will send RTLWMBUS telegram to %s:%d via UDP", client.ip.str().c_str(), client.port);
-                  this->udp_client_.beginPacket(client.ip.str().c_str(), client.port);
-                  this->udp_client_.printf("%c1;1;1;%s;%d;;;0x",
-                                           mbus_data.mode,
-                                           telegram_time,
-                                           mbus_data.rssi);
-                  for (int i = 0; i < mbus_data.frame.size(); i++) {
-                    this->udp_client_.printf("%02X", mbus_data.frame[i]);
-                  }
-                  this->udp_client_.print("\n");
-                  this->udp_client_.endPacket();
-                }
-                break;
-              default:
-                ESP_LOGE(TAG, "Unknown transport!");
-                break;
+          } break;
+          case TRANSPORT_UDP: {
+            ESP_LOGV(TAG, "Will send RTLWMBUS telegram to %s:%d via UDP", client.ip.str().c_str(), client.port);
+            this->udp_client_.beginPacket(client.ip.str().c_str(), client.port);
+            this->udp_client_.printf("%c1;1;1;%s;%d;;;0x", mbus_data.mode, telegram_time, mbus_data.rssi);
+            for (int i = 0; i < mbus_data.frame.size(); i++) {
+              this->udp_client_.printf("%02X", mbus_data.frame[i]);
             }
-          }
-          break;
-        default:
-          ESP_LOGE(TAG, "Unknown format!");
-          break;
-      }
-    }
-  }
+            this->udp_client_.print("\n");
+            this->udp_client_.endPacket();
+          } break;
+          default:
+            ESP_LOGE(TAG, "Unknown transport!");
+            break;
+        }
+      } break;
 
-  const LogString *WMBusComponent::format_to_string(Format format) {
-    switch (format) {
-      case FORMAT_HEX:
-        return LOG_STR("hex");
-      case FORMAT_RTLWMBUS:
-        return LOG_STR("rtl-wmbus");
       default:
-        return LOG_STR("unknown");
+        ESP_LOGE(TAG, "Unknown format!");
+        break;
     }
   }
+}
 
-  const LogString *WMBusComponent::transport_to_string(Transport transport) {
-    switch (transport) {
-      case TRANSPORT_TCP:
-        return LOG_STR("TCP");
-      case TRANSPORT_UDP:
-        return LOG_STR("UDP");
-      default:
-        return LOG_STR("unknown");
+const LogString *WMBusComponent::format_to_string(Format format) {
+  switch (format) {
+    case FORMAT_HEX:
+      return LOG_STR("hex");
+    case FORMAT_RTLWMBUS:
+      return LOG_STR("rtl-wmbus");
+    default:
+      return LOG_STR("unknown");
+  }
+}
+
+const LogString *WMBusComponent::transport_to_string(Transport transport) {
+  switch (transport) {
+    case TRANSPORT_TCP:
+      return LOG_STR("TCP");
+    case TRANSPORT_UDP:
+      return LOG_STR("UDP");
+    default:
+      return LOG_STR("unknown");
+  }
+}
+
+void WMBusComponent::dump_config() {
+  ESP_LOGCONFIG(TAG, "wM-Bus v%s-%s:", MY_VERSION, WMBUSMETERS_VERSION);
+  if (this->clients_.size() > 0) {
+    ESP_LOGCONFIG(TAG, "  Clients:");
+    for (auto &client : this->clients_) {
+      ESP_LOGCONFIG(TAG, "    %s: %s:%d %s [%s]", client.name.c_str(), client.ip.str().c_str(), client.port,
+                    LOG_STR_ARG(transport_to_string(client.transport)), LOG_STR_ARG(format_to_string(client.format)));
     }
   }
-
-  void WMBusComponent::dump_config() {
-    ESP_LOGCONFIG(TAG, "wM-Bus v%s-%s:", MY_VERSION, WMBUSMETERS_VERSION);
-    if (this->clients_.size() > 0) {
-      ESP_LOGCONFIG(TAG, "  Clients:");
-      for (auto & client : this->clients_) {
-        ESP_LOGCONFIG(TAG, "    %s: %s:%d %s [%s]",
-                      client.name.c_str(),
-                      client.ip.str().c_str(),
-                      client.port,
-                      LOG_STR_ARG(transport_to_string(client.transport)),
-                      LOG_STR_ARG(format_to_string(client.format)));
-      }
-    }
-    if (this->led_pin_ != nullptr) {
-      ESP_LOGCONFIG(TAG, "  LED:");
-      LOG_PIN("    Pin: ", this->led_pin_);
-      ESP_LOGCONFIG(TAG, "    Duration: %d ms", this->led_blink_time_);
-    }
+  if (this->led_pin_ != nullptr) {
+    ESP_LOGCONFIG(TAG, "  LED:");
+    LOG_PIN("    Pin: ", this->led_pin_);
+    ESP_LOGCONFIG(TAG, "    Duration: %d ms", this->led_blink_time_);
+  }
 #ifdef USE_ESP32
-    ESP_LOGCONFIG(TAG, "  Chip ID: %012llX", ESP.getEfuseMac());
+  ESP_LOGCONFIG(TAG, "  Chip ID: %012llX", ESP.getEfuseMac());
 #endif
-    ESP_LOGCONFIG(TAG, "  CC1101 frequency: %3.3f MHz", this->frequency_);
-    ESP_LOGCONFIG(TAG, "  CC1101 SPI bus:");
-    if (this->is_failed()) {
-      ESP_LOGE(TAG, "   Check connection to CC1101!");
-    }
-    LOG_PIN("    MOSI Pin: ", this->spi_conf_.mosi);
-    LOG_PIN("    MISO Pin: ", this->spi_conf_.miso);
-    LOG_PIN("    CLK Pin:  ", this->spi_conf_.clk);
-    LOG_PIN("    CS Pin:   ", this->spi_conf_.cs);
-    LOG_PIN("    GDO0 Pin: ", this->spi_conf_.gdo0);
-    LOG_PIN("    GDO2 Pin: ", this->spi_conf_.gdo2);
-    std::string drivers = "";
-    for (DriverInfo* p : allDrivers()) {
-      drivers += p->name().str() + ", ";
-    }
-    drivers.erase(drivers.size() - 2);
-    ESP_LOGCONFIG(TAG, "  Available drivers: %s", drivers.c_str());
-    for (const auto &ele : this->wmbus_listeners_) {
-      ele.second->dump_config();
+  ESP_LOGCONFIG(TAG, "  CC1101 frequency: %3.3f MHz", this->frequency_);
+  ESP_LOGCONFIG(TAG, "  CC1101 SPI bus:");
+  if (this->is_failed()) {
+    ESP_LOGE(TAG, "   Check connection to CC1101!");
+  }
+  LOG_PIN("    MOSI Pin: ", this->spi_conf_.mosi);
+  LOG_PIN("    MISO Pin: ", this->spi_conf_.miso);
+  LOG_PIN("    CLK Pin:  ", this->spi_conf_.clk);
+  LOG_PIN("    CS Pin:   ", this->spi_conf_.cs);
+  LOG_PIN("    GDO0 Pin: ", this->spi_conf_.gdo0);
+  LOG_PIN("    GDO2 Pin: ", this->spi_conf_.gdo2);
+  std::string drivers = "";
+  for (DriverInfo *p : allDrivers()) {
+    drivers += p->name().str() + ", ";
+  }
+  drivers.erase(drivers.size() - 2);
+  ESP_LOGCONFIG(TAG, "  Available drivers: %s", drivers.c_str());
+  for (const auto &ele : this->wmbus_listeners_) {
+    ele.second->dump_config();
+  }
+}
+
+///////////////////////////////////////
+
+void WMBusListener::dump_config() {
+  std::string key = format_hex_pretty(this->key);
+  key.erase(std::remove(key.begin(), key.end(), '.'), key.end());
+  if (key.size()) {
+    key.erase(key.size() - 5);
+  }
+  ESP_LOGCONFIG(TAG, "  Meter:");
+  ESP_LOGCONFIG(TAG, "    ID: %zu [0x%08X]", this->id, this->id);
+  ESP_LOGCONFIG(TAG, "    Type: %s", ((this->type).empty() ? "auto detect" : this->type.c_str()));
+  ESP_LOGCONFIG(TAG, "    Key: '%s'", key.c_str());
+  for (const auto &ele : this->fields) {
+    ESP_LOGCONFIG(TAG, "    Field: '%s'", ele.first.first.c_str());
+    LOG_SENSOR("     ", "Name:", ele.second);
+  }
+  for (const auto &ele : this->text_fields) {
+    ESP_LOGCONFIG(TAG, "    Text field: '%s'", ele.first.c_str());
+    LOG_TEXT_SENSOR("     ", "Name:", ele.second);
+  }
+}
+
+WMBusListener::WMBusListener(const uint32_t id, const std::string type, const std::string key) {
+  this->id = id;
+  this->type = type;
+  this->myKey = key;
+  hex_to_bin(key, &(this->key));
+}
+
+int WMBusListener::char_to_int(char input) {
+  if (input >= '0' && input <= '9') {
+    return input - '0';
+  }
+  if (input >= 'A' && input <= 'F') {
+    return input - 'A' + 10;
+  }
+  if (input >= 'a' && input <= 'f') {
+    return input - 'a' + 10;
+  }
+  return -1;
+}
+
+bool WMBusListener::hex_to_bin(const char *src, std::vector<unsigned char> *target) {
+  if (!src) return false;
+  while (*src && src[1]) {
+    if (*src == ' ' || *src == '#' || *src == '|' || *src == '_') {
+      src++;
+    } else {
+      int hi = char_to_int(*src);
+      int lo = char_to_int(src[1]);
+      if (hi < 0 || lo < 0) return false;
+      target->push_back(hi * 16 + lo);
+      src += 2;
     }
   }
-
-  ///////////////////////////////////////
-
-  void WMBusListener::dump_config() {
-    std::string key = format_hex_pretty(this->key);
-    key.erase(std::remove(key.begin(), key.end(), '.'), key.end());
-    if (key.size()) {
-      key.erase(key.size() - 5);
-    }
-    ESP_LOGCONFIG(TAG, "  Meter:");
-    ESP_LOGCONFIG(TAG, "    ID: %zu [0x%08X]", this->id, this->id);
-    ESP_LOGCONFIG(TAG, "    Type: %s", ((this->type).empty() ? "auto detect" : this->type.c_str()));
-    ESP_LOGCONFIG(TAG, "    Key: '%s'", key.c_str());
-    for (const auto &ele : this->fields) {
-      ESP_LOGCONFIG(TAG, "    Field: '%s'", ele.first.first.c_str());
-      LOG_SENSOR("     ", "Name:", ele.second);
-    }
-    for (const auto &ele : this->text_fields) {
-      ESP_LOGCONFIG(TAG, "    Text field: '%s'", ele.first.c_str());
-      LOG_TEXT_SENSOR("     ", "Name:", ele.second);
-    }
-  }
-
-  WMBusListener::WMBusListener(const uint32_t id, const std::string type, const std::string key) {
-    this->id = id;
-    this->type = type;
-    this->myKey = key;
-    hex_to_bin(key, &(this->key));
-  }
-
-  int WMBusListener::char_to_int(char input)
-  {
-    if(input >= '0' && input <= '9') {
-      return input - '0';
-    }
-    if(input >= 'A' && input <= 'F') {
-      return input - 'A' + 10;
-    }
-    if(input >= 'a' && input <= 'f') {
-      return input - 'a' + 10;
-    }
-    return -1;
-  }
-
-  bool WMBusListener::hex_to_bin(const char* src, std::vector<unsigned char> *target)
-  {
-    if (!src) return false;
-    while(*src && src[1]) {
-      if (*src == ' ' || *src == '#' || *src == '|' || *src == '_') {
-        // Ignore space and hashes and pipes and underlines.
-        src++;
-      }
-      else {
-        int hi = char_to_int(*src);
-        int lo = char_to_int(src[1]);
-        if (hi<0 || lo<0) return false;
-        target->push_back(hi*16 + lo);
-        src += 2;
-      }
-    }
-    return true;
-  }
+  return true;
+}
 
 }  // namespace wmbus
 }  // namespace esphome
