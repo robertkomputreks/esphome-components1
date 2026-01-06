@@ -68,13 +68,63 @@ namespace wmbus {
 
       this->frame_timestamp_ = this->time_->timestamp_now();
       send_to_clients(mbus_data);
+
       Telegram t;
-      if (t.parseHeader(mbus_data.frame) && t.addresses.empty()) {
-        ESP_LOGE(TAG, "Address is empty! T: %s", telegram.c_str());
+      const bool parsed = t.parseHeader(mbus_data.frame);
+      if (!parsed || t.addresses.empty()) {
+        ESP_LOGE(TAG, "Can't parse header / empty address! T: %s", telegram.c_str());
+        return;  // albo: continue; (jeśli wolisz nie przerywać loop'a)
       }
-      else {
-        uint32_t meter_id = (uint32_t)strtoul(t.addresses[0].id.c_str(), nullptr, 16);
-        bool meter_in_config = (this->wmbus_listeners_.count(meter_id) == 1) ? true : false;
+
+      // ID licznika jako uint32
+      const uint32_t meter_id = (uint32_t) strtoul(t.addresses[0].id.c_str(), nullptr, 16);
+      const bool meter_in_config = (this->wmbus_listeners_.count(meter_id) == 1);
+
+      // Detekcja drivera bez klucza (działa też dla nieznanych ID)
+      auto detected_drv_info      = pickMeterDriver(&t);
+      std::string detected_driver = (detected_drv_info.name().str().empty() ? "" : detected_drv_info.name().str().c_str());
+
+      // --- PUBLIKACJA "ANY" (wszystkie kamheat, nawet niekonfigurowane) ---
+      const bool is_kamheat = (detected_driver == "kamheat");
+      if (is_kamheat) {
+        if (this->any_rssi_ != nullptr) {
+          this->any_rssi_->publish_state(mbus_data.rssi);
+        }
+        if (this->any_telegram_ != nullptr) {
+          this->any_telegram_->publish_state(telegram);  // HEX
+        }
+        if (this->any_json_ != nullptr) {
+          // timestamp jak w RTLWMBUS
+          char telegram_time[24];
+          strftime(telegram_time, sizeof(telegram_time), "%Y-%m-%d %H:%M:%S.00Z", gmtime(&(this->frame_timestamp_)));
+
+          // mały JSON do bazy (bez dekodowania payloadu)
+          std::string j;
+          j.reserve(400 + telegram.size());
+          j += "{";
+          j += "\"meter\":\"";
+          j += detected_driver;
+          j += "\",\"id\":\"";
+          j += t.addresses[0].id;
+          j += "\",\"rssi_dbm\":";
+          j += std::to_string(mbus_data.rssi);
+          j += ",\"mode\":\"";
+          j += std::string(1, mbus_data.mode);
+          j += "\",\"block\":\"";
+          j += std::string(1, mbus_data.block);
+          j += "\",\"timestamp\":\"";
+          j += telegram_time;
+          j += "\",\"telegram\":\"";
+          j += telegram;
+          j += "\"}";
+          this->any_json_->publish_state(j);
+        }
+      }
+
+ 
+        // UWAGA: poniżej możesz użyć już detected_driver / detected_drv_info
+        // i tylko gdy meter_in_config wybierać used_driver z YAML
+
         
         if (this->log_all_ || meter_in_config) { //No need to do sth if logging is disabled and meter is not configured
 
