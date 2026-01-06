@@ -24,6 +24,20 @@ namespace wmbus {
 
   static const char *TAG = "wmbus";
 
+  static void log_long_telegram(const char *tag, const std::string &telegram) {
+    const size_t chunk = 200;
+    size_t len = telegram.size();
+
+    ESP_LOGI(tag, "Telegram length: %u bytes", (unsigned)len);
+    for (size_t i = 0; i < len; i += chunk) {
+      std::string part = telegram.substr(i, chunk);
+      ESP_LOGI(tag, "T[%03u-%03u]: %s",
+               (unsigned)i,
+               (unsigned)(i + part.size()),
+               part.c_str());
+    }
+  }
+
   void InfoComponent::setup() {
     return;
   }
