@@ -107,6 +107,11 @@ namespace wmbus {
       float get_setup_priority() const override { return setup_priority::LATE; }
       void set_led_pin(GPIOPin *led) { this->led_pin_ = led; }
       void set_led_blink_time(uint32_t led_blink_time) { this->led_blink_time_ = led_blink_time; }
+      // --- ANY / wszystkie telegramy (nawet nieznane ID) ---
+      void set_any_telegram(text_sensor::TextSensor *s) { this->any_telegram_ = s; }
+      void set_any_json(text_sensor::TextSensor *s) { this->any_json_ = s; }
+      void set_any_rssi(sensor::Sensor *s) { this->any_rssi_ = s; }
+
       void register_wmbus_listener(const uint32_t meter_id, const std::string type, const std::string key);
       void add_cc1101(InternalGPIOPin *mosi, InternalGPIOPin *miso,
                       InternalGPIOPin *clk, InternalGPIOPin *cs,
@@ -160,6 +165,12 @@ namespace wmbus {
     private:
 
     protected:
+
+      // --- DODAJ TO TUTAJ ---
+      text_sensor::TextSensor *any_telegram_{nullptr};
+      text_sensor::TextSensor *any_json_{nullptr};
+      sensor::Sensor *any_rssi_{nullptr};
+
       const LogString *format_to_string(Format format);
       const LogString *transport_to_string(Transport transport);
       void send_to_clients(WMbusFrame &mbus_data);
