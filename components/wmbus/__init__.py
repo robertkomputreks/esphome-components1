@@ -2,9 +2,13 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
 from esphome.log import Fore, color
+
+# Uwaga: w komponencie wmbus jest też plik text_sensor.py (platforma),
+# więc importujemy moduły bazowe z aliasami, żeby nie doszło do kolizji nazw.
+from esphome.components import sensor as core_sensor
+from esphome.components import text_sensor as core_text_sensor
+
 from esphome.components import time
-from esphome.components import sensor
-from esphome.components import text_sensor
 from esphome.components import mqtt
 from esphome.components import wifi
 from esphome.components import ethernet
@@ -29,7 +33,6 @@ from esphome.const import (
     CONF_RETAIN,
 )
 
-from esphome.const import SOURCE_FILE_EXTENSIONS
 
 CONF_TRANSPORT = "transport"
 
@@ -42,26 +45,27 @@ CONF_ALL_DRIVERS = "all_drivers"
 CONF_SYNC_MODE = "sync_mode"
 CONF_INFO_COMP_ID = "info_comp_id"
 CONF_WMBUS_MQTT_ID = "wmbus_mqtt_id"
-CONF_CLIENTS = 'clients'
+CONF_CLIENTS = "clients"
 CONF_ETH_REF = "wmbus_eth_id"
 CONF_WIFI_REF = "wmbus_wifi_id"
 
-CONF_ANY_RSSI = "any_rssi"
-CONF_ANY_TELEGRAM = "any_telegram"
-CONF_ANY_JSON = "any_json"
+# --- DODATKI: „ANY” (np. kamheat bez ID w YAML) ---
+CONF_ANY_RSSI = "any_rssi"  # sensor
+CONF_ANY_JSON = "any_json"  # text_sensor (payload do wysyłki)
+
 
 CODEOWNERS = ["@SzczepanLeon"]
 
 DEPENDENCIES = ["time"]
 AUTO_LOAD = ["sensor", "text_sensor"]
 
-wmbus_ns = cg.esphome_ns.namespace('wmbus')
-WMBusComponent = wmbus_ns.class_('WMBusComponent', cg.Component)
-InfoComponent = wmbus_ns.class_('InfoComponent', cg.Component)
-Client = wmbus_ns.struct('Client')
+wmbus_ns = cg.esphome_ns.namespace("wmbus")
+WMBusComponent = wmbus_ns.class_("WMBusComponent", cg.Component)
+InfoComponent = wmbus_ns.class_("InfoComponent", cg.Component)
+Client = wmbus_ns.struct("Client")
 Format = wmbus_ns.enum("Format")
 Transport = wmbus_ns.enum("Transport")
-MqttClient = wmbus_ns.struct('MqttClient')
+MqttClient = wmbus_ns.struct("MqttClient")
 
 FORMAT = {
     "HEX": Format.FORMAT_HEX,
@@ -75,63 +79,73 @@ TRANSPORT = {
 }
 validate_transport = cv.enum(TRANSPORT, upper=True)
 
-CLIENT_SCHEMA = cv.Schema({
-    cv.GenerateID():                              cv.declare_id(Client),
-    cv.Required(CONF_NAME):                       cv.string_strict,
-    cv.Required(CONF_IP_ADDRESS):                 cv.ipv4,
-    cv.Required(CONF_PORT):                       cv.port,
-    cv.Optional(CONF_TRANSPORT, default="TCP"):   cv.templatable(validate_transport),
-    cv.Optional(CONF_FORMAT, default="RTLWMBUS"): cv.templatable(validate_format),
-})
+CLIENT_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.declare_id(Client),
+        cv.Required(CONF_NAME): cv.string_strict,
+        cv.Required(CONF_IP_ADDRESS): cv.ipv4,
+        cv.Required(CONF_PORT): cv.port,
+        cv.Optional(CONF_TRANSPORT, default="TCP"): cv.templatable(validate_transport),
+        cv.Optional(CONF_FORMAT, default="RTLWMBUS"): cv.templatable(validate_format),
+    }
+)
 
-WMBUS_MQTT_SCHEMA = cv.Schema({
-    cv.GenerateID(CONF_WMBUS_MQTT_ID):        cv.declare_id(MqttClient),
-    cv.Required(CONF_USERNAME):               cv.string_strict,
-    cv.Required(CONF_PASSWORD):               cv.string_strict,
-    cv.Required(CONF_BROKER):                 cv.ipv4,
-    cv.Optional(CONF_PORT,    default=1883):  cv.port,
-    cv.Optional(CONF_RETAIN,  default=False): cv.boolean,
-})
+WMBUS_MQTT_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(CONF_WMBUS_MQTT_ID): cv.declare_id(MqttClient),
+        cv.Required(CONF_USERNAME): cv.string_strict,
+        cv.Required(CONF_PASSWORD): cv.string_strict,
+        cv.Required(CONF_BROKER): cv.ipv4,
+        cv.Optional(CONF_PORT, default=1883): cv.port,
+        cv.Optional(CONF_RETAIN, default=False): cv.boolean,
+    }
+)
 
-CONFIG_SCHEMA = cv.Schema({
-    cv.GenerateID(CONF_INFO_COMP_ID):                  cv.declare_id(InfoComponent),
-    cv.GenerateID():                                   cv.declare_id(WMBusComponent),
-    cv.OnlyWith(CONF_MQTT_ID, "mqtt"):                 cv.use_id(mqtt.MQTTClientComponent),
-    cv.OnlyWith(CONF_TIME_ID, "time"):                 cv.use_id(time.RealTimeClock),
-    cv.OnlyWith(CONF_WIFI_REF, "wifi"):                cv.use_id(wifi.WiFiComponent),
-    cv.OnlyWith(CONF_ETH_REF, "ethernet"):             cv.use_id(ethernet.EthernetComponent),
-    cv.Optional(CONF_MOSI_PIN,       default=13):      pins.internal_gpio_output_pin_schema,
-    cv.Optional(CONF_MISO_PIN,       default=12):      pins.internal_gpio_input_pin_schema,
-    cv.Optional(CONF_CLK_PIN,        default=14):      pins.internal_gpio_output_pin_schema,
-    cv.Optional(CONF_CS_PIN,         default=2):       pins.internal_gpio_output_pin_schema,
-    cv.Optional(CONF_GDO0_PIN,       default=5):       pins.internal_gpio_input_pin_schema,
-    cv.Optional(CONF_GDO2_PIN,       default=4):       pins.internal_gpio_input_pin_schema,
-    cv.Optional(CONF_LED_PIN):                         pins.gpio_output_pin_schema,
-    cv.Optional(CONF_LED_BLINK_TIME, default="200ms"): cv.positive_time_period,
-    cv.Optional(CONF_LOG_ALL,        default=False):   cv.boolean,
-    cv.Optional(CONF_ALL_DRIVERS,    default=False):   cv.boolean,
-    cv.Optional(CONF_CLIENTS):                         cv.ensure_list(CLIENT_SCHEMA),
-    cv.Optional(CONF_FREQUENCY,      default=868.950): cv.float_range(min=300, max=928),
-    cv.Optional(CONF_SYNC_MODE,      default=False):   cv.boolean,
-    cv.Optional(CONF_MQTT):                            cv.ensure_schema(WMBUS_MQTT_SCHEMA),
-    cv.Optional(CONF_ANY_RSSI):                     sensor.sensor_schema(
-                                                    unit_of_measurement="dBm",
-                                                    accuracy_decimals=0,
-                                                  ),
-    cv.Optional(CONF_ANY_TELEGRAM):                  text_sensor.text_sensor_schema(),
-    cv.Optional(CONF_ANY_JSON):                      text_sensor.text_sensor_schema(),
-})
+
+CONFIG_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(CONF_INFO_COMP_ID): cv.declare_id(InfoComponent),
+        cv.GenerateID(): cv.declare_id(WMBusComponent),
+        cv.OnlyWith(CONF_MQTT_ID, "mqtt"): cv.use_id(mqtt.MQTTClientComponent),
+        cv.OnlyWith(CONF_TIME_ID, "time"): cv.use_id(time.RealTimeClock),
+        cv.OnlyWith(CONF_WIFI_REF, "wifi"): cv.use_id(wifi.WiFiComponent),
+        cv.OnlyWith(CONF_ETH_REF, "ethernet"): cv.use_id(ethernet.EthernetComponent),
+        cv.Optional(CONF_MOSI_PIN, default=13): pins.internal_gpio_output_pin_schema,
+        cv.Optional(CONF_MISO_PIN, default=12): pins.internal_gpio_input_pin_schema,
+        cv.Optional(CONF_CLK_PIN, default=14): pins.internal_gpio_output_pin_schema,
+        cv.Optional(CONF_CS_PIN, default=2): pins.internal_gpio_output_pin_schema,
+        cv.Optional(CONF_GDO0_PIN, default=5): pins.internal_gpio_input_pin_schema,
+        cv.Optional(CONF_GDO2_PIN, default=4): pins.internal_gpio_input_pin_schema,
+        cv.Optional(CONF_LED_PIN): pins.gpio_output_pin_schema,
+        cv.Optional(CONF_LED_BLINK_TIME, default="200ms"): cv.positive_time_period,
+        cv.Optional(CONF_LOG_ALL, default=False): cv.boolean,
+        cv.Optional(CONF_ALL_DRIVERS, default=False): cv.boolean,
+        cv.Optional(CONF_CLIENTS): cv.ensure_list(CLIENT_SCHEMA),
+        cv.Optional(CONF_FREQUENCY, default=868.950): cv.float_range(min=300, max=928),
+        cv.Optional(CONF_SYNC_MODE, default=False): cv.boolean,
+        cv.Optional(CONF_MQTT): cv.ensure_schema(WMBUS_MQTT_SCHEMA),
+
+        # --- „ANY” ---
+        cv.Optional(CONF_ANY_RSSI): core_sensor.sensor_schema(
+            unit_of_measurement="dBm",
+            accuracy_decimals=0,
+        ),
+        cv.Optional(CONF_ANY_JSON): core_text_sensor.text_sensor_schema(),
+    }
+)
+
 
 def safe_ip(ip):
     if ip is None:
         return IPAddress(0, 0, 0, 0)
     return IPAddress(*ip.args)
 
+
 async def to_code(config):
     var_adv = cg.new_Pvariable(config[CONF_INFO_COMP_ID])
     await cg.register_component(var_adv, {})
 
-    if (config.get(CONF_MQTT_ID) and config.get(CONF_MQTT)):
+    if config.get(CONF_MQTT_ID) and config.get(CONF_MQTT):
         print(color(Fore.RED, "Only one MQTT can be configured!"))
         exit()
 
@@ -140,65 +154,79 @@ async def to_code(config):
 
     mosi = await cg.gpio_pin_expression(config[CONF_MOSI_PIN])
     miso = await cg.gpio_pin_expression(config[CONF_MISO_PIN])
-    clk  = await cg.gpio_pin_expression(config[CONF_CLK_PIN])
-    cs   = await cg.gpio_pin_expression(config[CONF_CS_PIN])
+    clk = await cg.gpio_pin_expression(config[CONF_CLK_PIN])
+    cs = await cg.gpio_pin_expression(config[CONF_CS_PIN])
     gdo0 = await cg.gpio_pin_expression(config[CONF_GDO0_PIN])
     gdo2 = await cg.gpio_pin_expression(config[CONF_GDO2_PIN])
 
-    cg.add(var.add_cc1101(mosi, miso, clk, cs, gdo0, gdo2, config[CONF_FREQUENCY], config[CONF_SYNC_MODE]))
+    cg.add(
+        var.add_cc1101(
+            mosi,
+            miso,
+            clk,
+            cs,
+            gdo0,
+            gdo2,
+            config[CONF_FREQUENCY],
+            config[CONF_SYNC_MODE],
+        )
+    )
 
-    time = await cg.get_variable(config[CONF_TIME_ID])
-    cg.add(var.set_time(time))
-
+    time_comp = await cg.get_variable(config[CONF_TIME_ID])
+    cg.add(var.set_time(time_comp))
 
     if config.get(CONF_ETH_REF):
         eth = await cg.get_variable(config[CONF_ETH_REF])
         cg.add(var.set_eth(eth))
 
     if config.get(CONF_WIFI_REF):
-        wifi = await cg.get_variable(config[CONF_WIFI_REF])
-        cg.add(var.set_wifi(wifi))
+        wifi_comp = await cg.get_variable(config[CONF_WIFI_REF])
+        cg.add(var.set_wifi(wifi_comp))
 
     if config.get(CONF_MQTT_ID):
-        mqtt = await cg.get_variable(config[CONF_MQTT_ID])
-        cg.add(var.set_mqtt(mqtt))
+        mqtt_comp = await cg.get_variable(config[CONF_MQTT_ID])
+        cg.add(var.set_mqtt(mqtt_comp))
 
     if config.get(CONF_MQTT):
         conf = config.get(CONF_MQTT)
         cg.add_define("USE_WMBUS_MQTT")
         cg.add_library("knolleary/PubSubClient", "2.8")
-        cg.add(var.set_mqtt(conf[CONF_USERNAME],
-                            conf[CONF_PASSWORD],
-                            safe_ip(conf[CONF_BROKER]),
-                            conf[CONF_PORT],
-                            conf[CONF_RETAIN]))
+        cg.add(
+            var.set_mqtt(
+                conf[CONF_USERNAME],
+                conf[CONF_PASSWORD],
+                safe_ip(conf[CONF_BROKER]),
+                conf[CONF_PORT],
+                conf[CONF_RETAIN],
+            )
+        )
 
     cg.add(var.set_log_all(config[CONF_LOG_ALL]))
 
-    # --- 'ANY' (np. wszystkie kamheat) – sensory zbiorcze ---
-    if CONF_ANY_RSSI in config:
-        any_rssi = await sensor.new_sensor(config[CONF_ANY_RSSI])
-        cg.add(var.set_any_rssi(any_rssi))
-
-    if CONF_ANY_TELEGRAM in config:
-        any_telegram = await text_sensor.new_text_sensor(config[CONF_ANY_TELEGRAM])
-        cg.add(var.set_any_telegram(any_telegram))
-
-    if CONF_ANY_JSON in config:
-        any_json = await text_sensor.new_text_sensor(config[CONF_ANY_JSON])
-        cg.add(var.set_any_json(any_json))
-
     for conf in config.get(CONF_CLIENTS, []):
-        cg.add(var.add_client(conf[CONF_NAME],
-                              safe_ip(conf[CONF_IP_ADDRESS]),
-                              conf[CONF_PORT],
-                              conf[CONF_TRANSPORT],
-                              conf[CONF_FORMAT]))
+        cg.add(
+            var.add_client(
+                conf[CONF_NAME],
+                safe_ip(conf[CONF_IP_ADDRESS]),
+                conf[CONF_PORT],
+                conf[CONF_TRANSPORT],
+                conf[CONF_FORMAT],
+            )
+        )
 
     if CONF_LED_PIN in config:
         led_pin = await cg.gpio_pin_expression(config[CONF_LED_PIN])
         cg.add(var.set_led_pin(led_pin))
         cg.add(var.set_led_blink_time(config[CONF_LED_BLINK_TIME].total_milliseconds))
+
+    # --- „ANY” publishery ---
+    if CONF_ANY_RSSI in config:
+        any_rssi = await core_sensor.new_sensor(config[CONF_ANY_RSSI])
+        cg.add(var.set_any_rssi(any_rssi))
+
+    if CONF_ANY_JSON in config:
+        any_json = await core_text_sensor.new_text_sensor(config[CONF_ANY_JSON])
+        cg.add(var.set_any_json(any_json))
 
     cg.add_library("SPI", None)
     cg.add_library("LSatan/SmartRC-CC1101-Driver-Lib", "2.5.7")
