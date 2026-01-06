@@ -3,6 +3,8 @@ import esphome.config_validation as cv
 from esphome import pins
 from esphome.log import Fore, color
 from esphome.components import time
+from esphome.components import sensor
+from esphome.components import text_sensor
 from esphome.components import mqtt
 from esphome.components import wifi
 from esphome.components import ethernet
@@ -43,6 +45,10 @@ CONF_WMBUS_MQTT_ID = "wmbus_mqtt_id"
 CONF_CLIENTS = 'clients'
 CONF_ETH_REF = "wmbus_eth_id"
 CONF_WIFI_REF = "wmbus_wifi_id"
+
+CONF_ANY_RSSI = "any_rssi"
+CONF_ANY_TELEGRAM = "any_telegram"
+CONF_ANY_JSON = "any_json"
 
 CODEOWNERS = ["@SzczepanLeon"]
 
@@ -108,6 +114,12 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_FREQUENCY,      default=868.950): cv.float_range(min=300, max=928),
     cv.Optional(CONF_SYNC_MODE,      default=False):   cv.boolean,
     cv.Optional(CONF_MQTT):                            cv.ensure_schema(WMBUS_MQTT_SCHEMA),
+    cv.Optional(CONF_ANY_RSSI):                     sensor.sensor_schema(
+                                                    unit_of_measurement="dBm",
+                                                    accuracy_decimals=0,
+                                                  ),
+    cv.Optional(CONF_ANY_TELEGRAM):                  text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_ANY_JSON):                      text_sensor.text_sensor_schema(),
 })
 
 def safe_ip(ip):
@@ -162,6 +174,19 @@ async def to_code(config):
                             conf[CONF_RETAIN]))
 
     cg.add(var.set_log_all(config[CONF_LOG_ALL]))
+
+    # --- 'ANY' (np. wszystkie kamheat) – sensory zbiorcze ---
+    if CONF_ANY_RSSI in config:
+        any_rssi = await sensor.new_sensor(config[CONF_ANY_RSSI])
+        cg.add(var.set_any_rssi(any_rssi))
+
+    if CONF_ANY_TELEGRAM in config:
+        any_telegram = await text_sensor.new_text_sensor(config[CONF_ANY_TELEGRAM])
+        cg.add(var.set_any_telegram(any_telegram))
+
+    if CONF_ANY_JSON in config:
+        any_json = await text_sensor.new_text_sensor(config[CONF_ANY_JSON])
+        cg.add(var.set_any_json(any_json))
 
     for conf in config.get(CONF_CLIENTS, []):
         cg.add(var.add_client(conf[CONF_NAME],
