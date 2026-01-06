@@ -141,7 +141,60 @@ namespace wmbus {
 
         
         if (this->log_all_ || meter_in_config) { //No need to do sth if logging is disabled and meter is not configured
+          
+// --- driver detection (raz) ---
+auto detected_drv_info      = pickMeterDriver(&t);
+std::string detected_driver = (detected_drv_info.name().str().empty() ? "" : detected_drv_info.name().str().c_str());
 
+// --- WILDCARD listener: meter_id == 0 obsługuje "nieznane" liczniki ---
+// Możesz go ograniczyć do kamheat ustawiając type: kamheat w YAML
+WMBusListener *wild = nullptr;
+if (this->wmbus_listeners_.count(0) == 1) {
+  wild = this->wmbus_listeners_[0];
+}
+
+if (wild != nullptr) {
+  const bool type_ok = (wild->type.empty() || wild->type == detected_driver);
+
+  // Publikujemy dla wszystkich (lub tylko kamheat jeśli tak ustawisz w YAML)
+  if (type_ok) {
+    // RSSI jako sensor (jeśli skonfigurowany)
+    for (auto const &field : wild->fields) {
+      const std::string &fname = field.first.first;
+      if (fname == "rssi") {
+        field.second->publish_state(mbus_data.rssi);
+      }
+    }
+
+    // TEXT-y (telegram/mode/block/driver/id) jako text_sensor
+    for (auto const &tf : wild->text_fields) {
+      const std::string &fname = tf.first;
+
+      if (fname == "telegram" || fname == "raw_telegram") {
+        tf.second->publish_state(telegram);  // HEX
+        continue;
+      }
+      if (fname == "mode") {
+        tf.second->publish_state(std::string(1, mbus_data.mode));
+        continue;
+      }
+      if (fname == "block") {
+        tf.second->publish_state(std::string(1, mbus_data.block));
+        continue;
+      }
+      if (fname == "driver") {
+        tf.second->publish_state(detected_driver);
+        continue;
+      }
+      if (fname == "id") {
+        tf.second->publish_state(t.addresses[0].id);  // HEX ID licznika
+        continue;
+      }
+
+      // inne pola ignorujemy dla wildcard (bo bez klucza i dekodowania i tak ich nie wyciągniesz)
+    }
+  }
+}
 
           //If the driver was explicitly stated in meter config, use that driver instead on detected one
           auto used_drv_info      = detected_drv_info;
