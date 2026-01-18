@@ -1,4 +1,4 @@
-﻿
+
 /*
  Copyright (C) 2018-2022 Fredrik Öhrström (gpl-3.0-or-later)
 
@@ -1898,6 +1898,19 @@ double vifScale(int vif)
     case 0x7b00:
     case 0x7b01: { double exp = (vif & 0x1) + 2; return pow(10.0, -exp); }
 
+        // Heat energy reported in GJ using the first VIF extension (FB).
+        // VIFE 0x08 => 10^-1 GJ, VIFE 0x09 => 10^0 GJ (see vif_7B_FirstExtensionType).
+        // ESPHome/wmbusmeters normalizes heat energy to kWh.
+        //
+        // 1 kWh = 0.0036 GJ  => 1 GJ = 277.777777... kWh
+        // raw is in (10^-1 GJ) or (10^0 GJ), so we choose the divisor such that:
+        //   kWh = raw / scale
+        //
+        // raw (0.1 GJ) : scale = 0.036  (since 0.1/0.0036 = 27.777..., and 1/27.777... = 0.036)
+        // raw (1.0 GJ) : scale = 0.0036
+    case 0x7b08: return 0.036;
+    case 0x7b09: return 0.0036;
+
                // relative humidity is a dimensionless value.
     case 0x7b1a: return 10.0; // Relative humidity 0.1 %
     case 0x7b1b: return 1.0;  // Relative humidity 1 %
@@ -1963,8 +1976,11 @@ double vifScale(int vif)
     case 0x7F: // Manufacturer specific
         */
 
-    default: warning("(wmbus) warning: type 0x%x cannot be scaled!", vif);
-        return -1;
+    default:
+        // If we don't know how to scale this VIF, keep the raw numeric value unchanged.
+        // Returning -1 here would invert the sign when extractDouble() divides by scale.
+        warning("(wmbus) warning: type 0x%x cannot be scaled!", vif);
+        return 1.0;
     }
 }
 
