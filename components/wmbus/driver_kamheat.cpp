@@ -121,7 +121,7 @@ namespace
             "The total energy consumption recorded by this meter.",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Energy,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::AnyEnergyVIF)
@@ -132,7 +132,7 @@ namespace
             "The total energy consumption recorded by this meter (VIF ext FB 08 = 0.1 GJ).",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Energy,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(DifVifKey("04FB08"))
             );
@@ -142,7 +142,7 @@ namespace
             "The total backwards energy consumption recorded by this meter.",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Energy,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::AnyEnergyVIF)
@@ -154,7 +154,7 @@ namespace
             "The volume of water (3/68/Volume V1).",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Volume,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::Volume)
@@ -231,7 +231,7 @@ namespace
             "The forward energy of the water (4/97/Energy E8).",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Energy,
-            VifScaling::None, DifSignedness::Signed,
+            VifScaling::None, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(DifVifKey("04FF07")),
             Unit::M3C);
@@ -241,7 +241,7 @@ namespace
             "The return energy of the water (5/110/Energy E9).",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Energy,
-            VifScaling::None, DifSignedness::Signed,
+            VifScaling::None, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(DifVifKey("04FF08")),
             Unit::M3C);
@@ -260,7 +260,7 @@ namespace
             "The energy consumption recorded by this meter at the set date (11/60/Heat energy E1/026C).",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Energy,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::AnyEnergyVIF)
@@ -272,7 +272,7 @@ namespace
             "The amount of water that had passed through this meter at the set date (13/68/Volume V1).",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Volume,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::Volume)
@@ -294,7 +294,7 @@ namespace
             "How long the meter has been collecting data.",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Time,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::OperatingTime)
@@ -306,7 +306,7 @@ namespace
             "Target volume (billing period) for subunit 1.",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Volume,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::Volume)
@@ -318,7 +318,7 @@ namespace
             "Total volume for subunit 1 (storage 0).",
             DEFAULT_PRINT_PROPERTIES,
             Quantity::Volume,
-            VifScaling::Auto, DifSignedness::Signed,
+            VifScaling::Auto, DifSignedness::Unsigned,
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::Volume)
@@ -416,3 +416,4 @@ namespace
 // telegram=|68888868083072303030302d2c400d0000000004069a00000004863c0000000004146d0f000004ff077205000004ff08ec0400000322890a0033220000000259720b025d040b02616e00022d0e00122db400023b6804123b7a0402ff22000044060000000044863c0000000044140000000044ff070000000044ff0800000000522d0000523b0000426c00006C16|
 // {"_":"telegram","media":"heat/cooling load","meter":"kamheat","name":"Kamstrup_MC303_Heat_AND_COOLING","id":"30303030","flow_return_temperature_difference_c":1.1,"forward_energy_m3c":1394,"max_flow_m3h":1.146,"max_power_kw":18,"on_time_h":2697,"on_time_at_error_h":0,"power_kw":1.4,"return_energy_m3c":1260,"t1_temperature_c":29.3,"t2_temperature_c":28.2,"target_energy_kwh":0,"target_volume_m3":0,"total_energy_backward_kwh":0,"total_energy_consumption_kwh":154,"total_volume_m3":39.49,"volume_flow_m3h":1.128,"status":"OK","target_date":"2000-00-00","timestamp":"1111-11-11T11:11:11Z"}
 // |Kamstrup_MC303_Heat_AND_COOLING;30303030;154;39.49;OK;1111-11-11 11:11.11
+
